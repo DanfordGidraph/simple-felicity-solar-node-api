@@ -17,3 +17,4 @@ node_modules
 .pnp.*
 .env
 */token-cache.json
+dist/
