@@ -16,4 +16,4 @@ node_modules
 #!.yarn/cache
 .pnp.*
 .env
-src/token-cache.json
+*/token-cache.json
