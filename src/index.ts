@@ -2,12 +2,22 @@ import axios, { AxiosError } from 'axios';
 import express, { Request, Response } from 'express';
 
 import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
+
+interface TokenCache {
+    token: string;
+    plantId: string | null;
+    savedAt: number;
+}
 
 dotenv.config();
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 const BASE_URL = 'https://shine-api.felicitysolar.com';
+const CACHE_FILE = path.join(__dirname, 'token-cache.json');
+
 
 const USERNAME = process.env.FELICITY_USERNAME;
 const PASSWORD = process.env.FELICITY_PASSWORD;
@@ -17,8 +27,8 @@ if (!USERNAME || !PASSWORD) {
     process.exit(1);
 }
 
-let token: string | null = null;
-let plantId: string | null = null;
+let token: string = "";
+let plantId: string = "";
 
 interface EnergyFlowRaw {
     emsSoc?: string;
@@ -39,6 +49,35 @@ interface EnergyFlowRaw {
     [key: string]: unknown;
 }
 
+
+async function ensureAuth(): Promise<string> {
+    if (!token) await login();
+    return token!;
+}
+
+function loadCache(): void {
+    try {
+        if (!fs.existsSync(CACHE_FILE)) return;
+        const cached = JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8')) as TokenCache;
+        if (cached.token) {
+            token = cached.token;
+            plantId = cached.plantId ?? "";
+            console.log('Loaded token from cache');
+        }
+    } catch {
+        console.warn('Could not read token cache, will login');
+    }
+}
+
+function saveCache(): void {
+    const data: TokenCache = {
+        token: token ?? '',
+        plantId,
+        savedAt: Date.now(),
+    };
+    fs.writeFileSync(CACHE_FILE, JSON.stringify(data, null, 2), { mode: 0o600 });
+}
+
 async function login(): Promise<string> {
     const res = await axios.post(`${BASE_URL}/userlogin`, {
         userName: USERNAME,
@@ -50,12 +89,9 @@ async function login(): Promise<string> {
         throw new Error(`Login failed: ${JSON.stringify(res.data)}`);
     }
 
-    return res.data.data.token || "" as string;
-}
-
-async function ensureAuth(): Promise<string> {
-    if (!token) await login();
-    return token!;
+    token = res.data.data.token;
+    saveCache();
+    return token;
 }
 
 async function fetchPlantId(): Promise<string> {
@@ -70,6 +106,7 @@ async function fetchPlantId(): Promise<string> {
     if (!list?.length) throw new Error('No plants returned');
 
     plantId = list[0].id;
+    saveCache();
     return plantId!;
 }
 
@@ -90,7 +127,7 @@ async function getEnergyFlow(retry = true): Promise<EnergyFlowRaw> {
     } catch (err) {
         const ax = err as AxiosError;
         if (retry && ax.response?.status === 401) {
-            token = null; // force re-login
+            token = ""; // force re-login
             return getEnergyFlow(false);
         }
         throw err;
@@ -166,6 +203,7 @@ app.get('/health', (_req, res) => {
     res.json({ ok: true, hasToken: !!token, plantId });
 });
 
+loadCache();
 app.listen(PORT, async () => {
     console.log(`Felicity solar API listening on http://localhost:${PORT}`);
     try {
